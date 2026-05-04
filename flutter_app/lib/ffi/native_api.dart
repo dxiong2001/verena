@@ -19,29 +19,20 @@ class NativeApi {
 
   CaptureResult captureActiveWindow(String path) {
     final ptr = path.toNativeUtf8();
-
     try {
       final native = _bindings.capture(ptr);
-
-      final pathStr = native.path.toDartString();
-      final titleStr = native.windowTitle.toDartString();
-      final frameHash = array32ToList(native.frameHash);
-      final prevHash = array32ToList(native.prevHash);
-      // ⚠️ free Rust memory
-      if (native.path != nullptr) {
-        _bindings.freeString(native.path);
-      }
-      if (native.windowTitle != nullptr) {
-        _bindings.freeString(native.windowTitle);
-      }
-
+      print(native.status);
+      final titleStr = "placeholder";
+      print("testttttt");
       return CaptureResult(
         status: native.status,
-        path: pathStr,
+        path: path,
         windowTitle: titleStr,
-        frameHash: frameHash,
-        prevHash: prevHash,
       );
+    } catch (e) {
+      print("native api error: $e");
+
+      return CaptureResult(status: 2, path: path, windowTitle: "");
     } finally {
       malloc.free(ptr);
     }

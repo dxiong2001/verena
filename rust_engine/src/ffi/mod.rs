@@ -31,7 +31,7 @@ use crate::types::capture_result::CaptureResult;
 #[no_mangle]
 pub extern "C" fn capture_active_window_ffi(
     path_ptr: *const c_char,
-    prev_hash_ptr: *const u8, 
+    prev_hash_ptr: *const u8,
 ) -> CaptureResult {
     if path_ptr.is_null() || prev_hash_ptr.is_null() {
         return error_result(-1);
@@ -44,18 +44,14 @@ pub extern "C" fn capture_active_window_ffi(
         }
     };
 
-    // 🧠 read prev_hash (32 bytes)
     let prev_hash: [u8; 32] = unsafe {
-        let slice = std::slice::from_raw_parts(prev_hash_ptr, 32);
-
         let mut arr = [0u8; 32];
-        arr.copy_from_slice(slice);
+        std::ptr::copy_nonoverlapping(prev_hash_ptr, arr.as_mut_ptr(), 32);
         arr
     };
 
-    // 🧠 call capture
-    match capture_active_window(path, Some(prev_hash)) {
-        Ok(snapshot) => build_result(0, path, snapshot),
+    match capture_active_window(path, ) {
+        Ok(()) => build_result(0),
         Err(_) => error_result(-3),
     }
 }
@@ -75,10 +71,6 @@ pub fn error_result(code: i32) -> CaptureResult {
     CaptureResult {
         status: code,
 
-        path: std::ptr::null_mut(),
-        window_title: std::ptr::null_mut(),
 
-        frame_hash: [0u8; 32],
-        prev_hash: [0u8; 32],
     }
 }

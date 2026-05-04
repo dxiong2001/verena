@@ -38,6 +38,8 @@ class _HomeScreenState extends State<HomeScreen>
   bool openSettings = false;
   bool ignoreNextOutsideTap = false;
   bool editingCaptureName = false;
+  bool isCapturing = false;
+
   String status = "Idle";
   late String snapshotInterval;
   late int currentCapture;
@@ -120,6 +122,7 @@ class _HomeScreenState extends State<HomeScreen>
   @override
   void dispose() {
     trayManager.removeListener(this);
+
     super.dispose();
   }
 
@@ -266,24 +269,51 @@ class _HomeScreenState extends State<HomeScreen>
     return newFolder;
   }
 
-  Timer? _captureTimer;
+  Future<void> _queueCapture() async {
+    if (isCapturing) return; // prevents overlap
 
-  void startAutoCapture() {
-    _captureTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+    isCapturing = true;
+
+    try {
       final path =
           "${currentProjectCapture!.directoryPath}/captures/capture_${DateTime.now().millisecondsSinceEpoch}.jpg";
+      print("START capture ${DateTime.now()}");
+      final CaptureResult result = await captureService.captureAsync(path);
+      print("END capture ${DateTime.now()}");
+      await Future.delayed(Duration(milliseconds: 50));
+      print(result.windowTitle.split(" - ").last);
+      // _handleResult(result);
+    } finally {
+      isCapturing = false;
+    }
+  }
 
-      CaptureResult ret = captureService.capture(path);
-      print(ret.path);
-      print(ret.windowTitle);
-      print("------------");
-      //converting uinlist to int??
-      lastHash = ret.frameHash;
-    });
+  Future<void> startCaptureLoop() async {
+    while (true) {
+      final start = DateTime.now();
+
+      await _queueCapture();
+
+      final elapsed = DateTime.now().difference(start);
+
+      final remaining = const Duration(seconds: 1) - elapsed;
+      print(elapsed);
+      if (remaining > Duration.zero) {
+        await Future.delayed(remaining);
+      }
+      if (!isRunning) {
+        break;
+      }
+    }
+  }
+
+  void startAutoCapture() {
+    startCaptureLoop();
   }
 
   void stopAutoCapture() {
-    _captureTimer?.cancel();
+    isRunning = false;
+    setState(() {});
   }
 
   @override
