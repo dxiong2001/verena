@@ -1,7 +1,7 @@
 use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::ffi::CString;
-use crate::capture::engine::{capture_active_window, build_result};
+use crate::capture::capture_engine::{capture_active_window, build_result};
 use crate::types::capture_result::CaptureResult;
 
 
