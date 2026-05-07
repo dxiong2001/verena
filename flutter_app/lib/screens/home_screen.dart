@@ -17,6 +17,9 @@ import '../services/name_generation.dart';
 import '../services/capture_service.dart';
 import 'dart:async';
 import '../models/capture_result.dart';
+import '../services/capture_pipeline.dart';
+import '../capture/capture_region.dart';
+import '../capture/screen_capture_overlay.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -39,10 +42,12 @@ class _HomeScreenState extends State<HomeScreen>
   bool ignoreNextOutsideTap = false;
   bool editingCaptureName = false;
   bool isCapturing = false;
+  bool settingCaptureWindow = false;
 
   String status = "Idle";
   late String snapshotInterval;
   late int currentCapture;
+  late final CapturePipeline pipeline;
   Map<String, int> intervalList = {
     "15 seconds": 15,
     "30 seconds": 30,
@@ -57,6 +62,7 @@ class _HomeScreenState extends State<HomeScreen>
   int currentCaptureIndex = -1;
   List<int> selectedCaptures = [];
   Uint8List lastHash = Uint8List(32);
+  Offset widgetOffset = Offset.zero;
 
   late final AnimationController _controller;
   final ScrollController _scrollController = ScrollController();
@@ -106,9 +112,11 @@ class _HomeScreenState extends State<HomeScreen>
 
   @override
   void initState() {
+    windowManager.setOpacity(0.0);
     loadCaptures();
 
     super.initState();
+    pipeline = CapturePipeline();
     trayManager.addListener(this);
     _handleTrayIcon().whenComplete(() {
       setState(() {});
@@ -117,31 +125,64 @@ class _HomeScreenState extends State<HomeScreen>
       vsync: this,
       duration: const Duration(milliseconds: 6000),
     );
+
+    windowManager.setOpacity(1.0);
   }
 
   @override
   void dispose() {
     trayManager.removeListener(this);
-
     super.dispose();
+  }
+
+  Future<CaptureRegion?> screenCapture() async {
+    return await Navigator.push(
+      context,
+      PageRouteBuilder(
+        opaque: true,
+        pageBuilder: (_, __, ___) => const ScreenCaptureOverlay(),
+      ),
+    );
   }
 
   void startCaptureSession() async {
     closeSettings();
-    if (currentProjectCapture == null) {
-      await createNewCapture(defaultCaptureName);
+    // if (currentProjectCapture == null) {
+    //   await createNewCapture(defaultCaptureName);
+    // }
+
+    // Save old window state
+    final oldBounds = await windowManager.getBounds();
+    await windowManager.setOpacity(0.0);
+    // Small delay so resize visually completes
+    setState(() {
+      settingCaptureWindow = false;
+    });
+    if (!mounted) return;
+    final region = await screenCapture();
+    await windowManager.setOpacity(0.0);
+    await Future.delayed(const Duration(milliseconds: 200));
+    await windowManager.setBounds(oldBounds);
+    await Future.delayed(const Duration(milliseconds: 500));
+    await windowManager.setOpacity(1.0);
+
+    if (region == null) {
+      return;
     }
+
+    // await Future.delayed(const Duration(milliseconds: 200));
 
     // rust.startCaptureSession(
     //   intervalList[snapshotInterval] ?? -1,
     //   currentProjectCapture!.directoryPath,
     // );
-    _controller.repeat();
-    setState(() {
-      isRunning = true;
-      status = "CaptureSession Running";
-    });
-    startAutoCapture();
+
+    // _controller.repeat();
+    // setState(() {
+    //   isRunning = true;
+    //   status = "CaptureSession Running";
+    // });
+    // startAutoCapture();
   }
 
   void stopCaptureSession() {
@@ -308,12 +349,13 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   void startAutoCapture() {
-    startCaptureLoop();
+    // startCaptureLoop();
+
+    pipeline.start("${currentProjectCapture!.directoryPath}/captures");
   }
 
   void stopAutoCapture() {
-    isRunning = false;
-    setState(() {});
+    pipeline.stop();
   }
 
   @override
@@ -325,540 +367,552 @@ class _HomeScreenState extends State<HomeScreen>
         60,
         60,
       ).withValues(alpha: 0.0),
-      body: SizedBox(
-        width: windowWidth,
-        child: Stack(
-          children: [
-            Column(
-              mainAxisAlignment: MainAxisAlignment.start,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Container(
-                  width: windowWidth,
-                  height: 32,
-                  decoration: BoxDecoration(
-                    color: isRunning
-                        ? const Color.fromARGB(32, 255, 255, 255)
-                        : const Color.fromARGB(255, 255, 255, 255),
-                    borderRadius: BorderRadius.all(Radius.circular(5)),
-                    border: Border.all(
-                      color: const Color.fromARGB(255, 0, 0, 0),
-                      width: 1,
+      body: Transform.translate(
+        offset: widgetOffset,
+        child: SizedBox(
+          width: windowWidth,
+          child: Stack(
+            children: [
+              Column(
+                mainAxisAlignment: MainAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Container(
+                    width: windowWidth,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      color: isRunning
+                          ? const Color.fromARGB(32, 255, 255, 255)
+                          : const Color.fromARGB(255, 255, 255, 255),
+                      borderRadius: BorderRadius.all(Radius.circular(5)),
+                      border: Border.all(
+                        color: const Color.fromARGB(255, 0, 0, 0),
+                        width: 1,
+                      ),
                     ),
-                  ),
-                  child: Stack(
-                    children: [
-                      Positioned.fill(
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.translucent,
-                          onPanStart: (_) => windowManager.startDragging(),
-                          onTap: () {
-                            setState(() {
-                              closeSettings();
-                            });
-                          },
-                          child: const SizedBox.expand(),
-                        ),
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Container(
-                            margin: EdgeInsets.only(left: 5),
-
-                            width: 20,
-                            height: 30,
-                            child: Stack(
-                              alignment: AlignmentGeometry.center,
-                              children: [
-                                Icon(
-                                  Icons.drag_indicator_outlined,
-                                  color: Colors.black,
-                                ),
-                                Positioned.fill(
-                                  child: GestureDetector(
-                                    behavior: HitTestBehavior.translucent,
-                                    onPanStart: (_) =>
-                                        windowManager.startDragging(),
-                                    child: const SizedBox.expand(),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-
-                          minimizeButton(context),
-                          exitButton(context),
-                          VerticalDivider(
-                            width: 0.8,
-                            indent: 4,
-                            endIndent: 4,
-                            color: Colors.black,
-                          ),
-                          processCaptureButton(context),
-                          settingsButton(context),
-                          beginCaptureButton(context),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-
-                openSettings
-                    ? Container(
-                        margin: EdgeInsets.only(top: 10),
-                        height: 355,
-                        width: windowWidth,
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(5),
-                          border: Border.all(
-                            color: const Color.fromARGB(255, 0, 0, 0),
-                            width: 1,
+                    child: Stack(
+                      children: [
+                        Positioned.fill(
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.translucent,
+                            onPanStart: (_) => windowManager.startDragging(),
+                            onTap: () {
+                              setState(() {
+                                closeSettings();
+                              });
+                            },
+                            child: const SizedBox.expand(),
                           ),
                         ),
-                        child: Column(
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
                             Container(
-                              alignment: Alignment.centerLeft,
-                              margin: EdgeInsets.all(5),
-                              padding: EdgeInsets.symmetric(horizontal: 5),
-                              height: 25,
-                              width: double.infinity,
-                              decoration: BoxDecoration(
-                                color: Colors.black,
-                                borderRadius: BorderRadius.circular(3),
-                              ),
-                              child: Listener(
-                                onPointerSignal: (event) {
-                                  if (event is PointerScrollEvent) {
-                                    _scrollController.animateTo(
-                                      _scrollController.offset +
-                                          event.scrollDelta.dy,
-                                      duration: const Duration(
-                                        milliseconds: 100,
-                                      ),
-                                      curve: Curves.easeOut,
-                                    );
-                                  }
-                                },
-                                child: SingleChildScrollView(
-                                  controller: _scrollController,
-                                  scrollDirection: Axis.horizontal,
-                                  child: Row(
-                                    children: [
-                                      Text(
-                                        currentProjectCapture != null
-                                            ? currentProjectCapture!.name
-                                            : "",
-                                        style: GoogleFonts.montserrat(
-                                          textStyle: TextStyle(
-                                            color: const Color.fromARGB(
-                                              255,
-                                              255,
-                                              255,
-                                              255,
-                                            ),
-                                            fontSize: 10,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-                            intervalDropdownButton(context),
-                            Divider(
-                              indent: 10,
-                              endIndent: 10,
-                              color: Colors.black,
-                              thickness: 0.6,
-                            ),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.end,
-                              children: [
-                                Container(
-                                  width: 25,
-                                  height: 25,
-                                  alignment: Alignment.centerRight,
-                                  child: RawMaterialButton(
-                                    shape: CircleBorder(),
-                                    onPressed: () {},
-                                    padding: EdgeInsetsGeometry.all(2),
-                                    fillColor: const Color.fromARGB(
-                                      255,
-                                      255,
-                                      255,
-                                      255,
-                                    ),
-                                    constraints: BoxConstraints(minWidth: 0.0),
-                                    child: Icon(
-                                      Icons.remove_red_eye_outlined,
-                                      size: 18,
-                                    ),
-                                  ),
-                                ),
-                                SizedBox(width: 5),
-                                Container(
-                                  width: 25,
-                                  height: 25,
-                                  alignment: Alignment.centerRight,
-                                  child: RawMaterialButton(
-                                    shape: CircleBorder(),
-                                    onPressed: () {
-                                      if (currentProjectCapture == null &&
-                                          selectedCaptures.isEmpty) {
-                                        return;
-                                      }
-                                      selectedCaptures.isEmpty
-                                          ? deleteCapture(
-                                              currentProjectCapture!.id,
-                                            )
-                                          : deleteCaptures();
-                                    },
-                                    padding: EdgeInsetsGeometry.all(2),
-                                    fillColor: const Color.fromARGB(
-                                      255,
-                                      255,
-                                      255,
-                                      255,
-                                    ),
-                                    constraints: BoxConstraints(minWidth: 0.0),
-                                    child: Icon(
-                                      Icons.delete_outlined,
-                                      size: 18,
-                                    ),
-                                  ),
-                                ),
-                                SizedBox(width: 8),
-                              ],
-                            ),
-                            Container(
-                              decoration: BoxDecoration(
-                                border: Border.all(color: Colors.black),
-                              ),
-                              margin: EdgeInsets.all(7),
-                              height: 175,
-                              child: Scrollbar(
-                                controller: _scrollController2,
-                                thickness: 3,
-                                radius: const Radius.circular(0),
-                                thumbVisibility: true,
-                                child: ScrollConfiguration(
-                                  behavior: const ScrollBehavior().copyWith(
-                                    scrollbars: false,
-                                  ),
-                                  child: ListView.builder(
-                                    itemCount: captures.length,
-                                    controller: _scrollController2,
-                                    itemBuilder: (BuildContext context, int index) {
-                                      return Container(
-                                        alignment: Alignment.centerLeft,
-                                        height: 23,
-                                        width: windowWidth - 30,
+                              margin: EdgeInsets.only(left: 5),
 
-                                        child: SizedBox(
-                                          width: double.infinity,
-                                          child: TapRegion(
-                                            onTapOutside: (event) {
-                                              if (currentCaptureIndex !=
-                                                  index) {
-                                                return;
-                                              }
-
-                                              setState(() {
-                                                editingCaptureName = false;
-                                              });
-                                            },
-                                            child: TextButton(
-                                              onLongPress: () async {
-                                                currentCaptureIndex = index;
-                                                currentProjectCapture =
-                                                    captures[index];
-
-                                                _captureEditFocusNode
-                                                    .requestFocus();
-                                                setState(() {
-                                                  _captureEditController.text =
-                                                      captures[index].name;
-                                                  editingCaptureName = true;
-                                                });
-                                                await service.setLastCaptureId(
-                                                  currentProjectCapture!.id,
-                                                );
-                                              },
-                                              onPressed: () async {
-                                                print(editingCaptureName);
-                                                if (editingCaptureName) return;
-                                                if (HardwareKeyboard
-                                                    .instance
-                                                    .isShiftPressed) {
-                                                  if (currentCaptureIndex !=
-                                                      -1) {
-                                                    selectedCaptures.add(
-                                                      currentCaptureIndex,
-                                                    );
-                                                    currentCaptureIndex = -1;
-                                                    currentProjectCapture =
-                                                        null;
-                                                    await service
-                                                        .setLastCaptureId(-1);
-                                                  }
-
-                                                  if (selectedCaptures.contains(
-                                                    index,
-                                                  )) {
-                                                    selectedCaptures.remove(
-                                                      index,
-                                                    );
-                                                  } else {
-                                                    selectedCaptures.add(index);
-                                                  }
-                                                } else {
-                                                  selectedCaptures = [];
-                                                  currentCaptureIndex =
-                                                      currentCaptureIndex ==
-                                                          index
-                                                      ? -1
-                                                      : index;
-                                                  if (currentCaptureIndex ==
-                                                      index) {
-                                                    currentProjectCapture =
-                                                        captures[index];
-
-                                                    await service
-                                                        .setLastCaptureId(
-                                                          currentProjectCapture!
-                                                              .id,
-                                                        );
-                                                  } else {
-                                                    currentProjectCapture =
-                                                        null;
-                                                  }
-                                                }
-                                                setState(() {});
-                                              },
-                                              style: ButtonStyle(
-                                                alignment: Alignment.centerLeft,
-                                                backgroundColor:
-                                                    WidgetStateProperty.resolveWith<
-                                                      Color
-                                                    >((
-                                                      Set<WidgetState> states,
-                                                    ) {
-                                                      if (states.contains(
-                                                            WidgetState.hovered,
-                                                          ) ||
-                                                          (currentCaptureIndex ==
-                                                                  index ||
-                                                              selectedCaptures
-                                                                  .contains(
-                                                                    index,
-                                                                  ))) {
-                                                        return const Color.fromARGB(
-                                                          255,
-                                                          255,
-                                                          239,
-                                                          232,
-                                                        );
-                                                      }
-                                                      return Colors
-                                                          .white; // null throus error in flutter 2.2+.
-                                                    }),
-                                                textStyle:
-                                                    WidgetStatePropertyAll(
-                                                      TextStyle(
-                                                        color: Colors.black,
-                                                      ),
-                                                    ),
-                                                shape: WidgetStatePropertyAll(
-                                                  ContinuousRectangleBorder(),
-                                                ),
-                                              ),
-                                              child:
-                                                  editingCaptureName &&
-                                                      currentCaptureIndex ==
-                                                          index
-                                                  ? Container(
-                                                      child: TextField(
-                                                        onSubmitted:
-                                                            (value) async {
-                                                              editingCaptureName =
-                                                                  false;
-                                                              setState(() {});
-                                                              updateCapture(
-                                                                value,
-                                                              );
-                                                            },
-                                                        textAlignVertical:
-                                                            TextAlignVertical
-                                                                .center,
-                                                        focusNode:
-                                                            _captureEditFocusNode,
-                                                        cursorColor:
-                                                            Colors.black,
-                                                        style:
-                                                            GoogleFonts.montserrat(
-                                                              textStyle:
-                                                                  TextStyle(
-                                                                    fontSize:
-                                                                        10,
-                                                                  ),
-                                                            ),
-
-                                                        decoration: InputDecoration(
-                                                          enabledBorder: OutlineInputBorder(
-                                                            gapPadding: 0,
-                                                            borderRadius:
-                                                                BorderRadius.circular(
-                                                                  3.0,
-                                                                ),
-                                                            borderSide: BorderSide(
-                                                              color: Colors
-                                                                  .transparent,
-                                                              width: 0.0,
-                                                            ),
-                                                          ),
-                                                          focusedBorder: OutlineInputBorder(
-                                                            gapPadding: 0,
-                                                            borderRadius:
-                                                                BorderRadius.circular(
-                                                                  5.0,
-                                                                ),
-                                                            borderSide: BorderSide(
-                                                              color: Colors
-                                                                  .transparent,
-                                                              width: 0.0,
-                                                            ),
-                                                          ),
-                                                          border: OutlineInputBorder(
-                                                            gapPadding: 0,
-                                                            borderRadius:
-                                                                BorderRadius.circular(
-                                                                  10.0,
-                                                                ),
-                                                          ),
-                                                          contentPadding:
-                                                              EdgeInsets.zero,
-                                                          suffixIcon: InkWell(
-                                                            onTap: () async {
-                                                              editingCaptureName =
-                                                                  false;
-                                                              setState(() {});
-                                                              updateCapture(
-                                                                _captureEditController
-                                                                    .text,
-                                                              );
-                                                            },
-                                                            child: Icon(
-                                                              Icons
-                                                                  .edit_outlined,
-                                                              color:
-                                                                  Colors.black,
-                                                              size: 10,
-                                                            ),
-                                                          ),
-                                                        ),
-                                                        controller:
-                                                            _captureEditController,
-                                                      ),
-                                                    )
-                                                  : Text(
-                                                      overflow:
-                                                          TextOverflow.ellipsis,
-                                                      captures[index].name,
-                                                      style:
-                                                          GoogleFonts.montserrat(
-                                                            textStyle:
-                                                                TextStyle(
-                                                                  color: Colors
-                                                                      .black,
-                                                                  fontSize: 10,
-                                                                ),
-                                                          ),
-                                                    ),
-                                            ),
-                                          ),
-                                        ),
-                                      );
-                                    },
-                                  ),
-                                ),
-                              ),
-                            ),
-                            Container(
-                              padding: EdgeInsets.only(
-                                left: 7,
-                                right: 7,
-                                top: 5,
-                              ),
-                              child: Row(
+                              width: 20,
+                              height: 30,
+                              child: Stack(
+                                alignment: AlignmentGeometry.center,
                                 children: [
-                                  Expanded(
-                                    child: Container(
-                                      height: 40,
-                                      child: TextField(
-                                        onSubmitted: (String value) async {
-                                          await createNewCapture(value);
-                                        },
-                                        controller: _createCaptureController,
-                                        cursorColor: Colors.black,
-                                        style: GoogleFonts.montserrat(
-                                          textStyle: TextStyle(fontSize: 10),
-                                        ),
-                                        decoration: InputDecoration(
-                                          suffixIcon: InkWell(
-                                            onTap: () async {
-                                              await createNewCapture(
-                                                _createCaptureController.text,
-                                              );
-                                            },
-                                            child: Icon(
-                                              Icons.add,
-                                              color: Colors.black,
-                                              size: 10,
-                                            ),
-                                          ),
-                                          hintText: "New capture",
-                                          contentPadding: EdgeInsets.all(5),
-                                          enabledBorder: OutlineInputBorder(
-                                            borderRadius: BorderRadius.circular(
-                                              3.0,
-                                            ),
-                                            borderSide: BorderSide(
-                                              color: Colors.grey,
-                                              width: 0.0,
-                                            ),
-                                          ),
-                                          focusedBorder: OutlineInputBorder(
-                                            borderRadius: BorderRadius.circular(
-                                              5.0,
-                                            ),
-                                            borderSide: BorderSide(
-                                              color: Colors.grey,
-                                              width: 0.0,
-                                            ),
-                                          ),
-                                          border: OutlineInputBorder(
-                                            borderRadius: BorderRadius.circular(
-                                              10.0,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
+                                  Icon(
+                                    Icons.drag_indicator_outlined,
+                                    color: Colors.black,
+                                  ),
+                                  Positioned.fill(
+                                    child: GestureDetector(
+                                      behavior: HitTestBehavior.translucent,
+                                      onPanStart: (_) =>
+                                          windowManager.startDragging(),
+                                      child: const SizedBox.expand(),
                                     ),
                                   ),
                                 ],
                               ),
                             ),
+
+                            minimizeButton(context),
+                            exitButton(context),
+                            VerticalDivider(
+                              width: 0.8,
+                              indent: 4,
+                              endIndent: 4,
+                              color: Colors.black,
+                            ),
+                            processCaptureButton(context),
+                            settingsButton(context),
+                            beginCaptureButton(context),
                           ],
                         ),
-                      )
-                    : SizedBox(),
-              ],
-            ),
-          ],
+                      ],
+                    ),
+                  ),
+
+                  openSettings
+                      ? Container(
+                          margin: EdgeInsets.only(top: 10),
+                          height: 355,
+                          width: windowWidth,
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(5),
+                            border: Border.all(
+                              color: const Color.fromARGB(255, 0, 0, 0),
+                              width: 1,
+                            ),
+                          ),
+                          child: Column(
+                            children: [
+                              Container(
+                                alignment: Alignment.centerLeft,
+                                margin: EdgeInsets.all(5),
+                                padding: EdgeInsets.symmetric(horizontal: 5),
+                                height: 25,
+                                width: double.infinity,
+                                decoration: BoxDecoration(
+                                  color: Colors.black,
+                                  borderRadius: BorderRadius.circular(3),
+                                ),
+                                child: Listener(
+                                  onPointerSignal: (event) {
+                                    if (event is PointerScrollEvent) {
+                                      _scrollController.animateTo(
+                                        _scrollController.offset +
+                                            event.scrollDelta.dy,
+                                        duration: const Duration(
+                                          milliseconds: 100,
+                                        ),
+                                        curve: Curves.easeOut,
+                                      );
+                                    }
+                                  },
+                                  child: SingleChildScrollView(
+                                    controller: _scrollController,
+                                    scrollDirection: Axis.horizontal,
+                                    child: Row(
+                                      children: [
+                                        Text(
+                                          currentProjectCapture != null
+                                              ? currentProjectCapture!.name
+                                              : "",
+                                          style: GoogleFonts.montserrat(
+                                            textStyle: TextStyle(
+                                              color: const Color.fromARGB(
+                                                255,
+                                                255,
+                                                255,
+                                                255,
+                                              ),
+                                              fontSize: 10,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              intervalDropdownButton(context),
+                              Divider(
+                                indent: 10,
+                                endIndent: 10,
+                                color: Colors.black,
+                                thickness: 0.6,
+                              ),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.end,
+                                children: [
+                                  Container(
+                                    width: 25,
+                                    height: 25,
+                                    alignment: Alignment.centerRight,
+                                    child: RawMaterialButton(
+                                      shape: CircleBorder(),
+                                      onPressed: () {},
+                                      padding: EdgeInsetsGeometry.all(2),
+                                      fillColor: const Color.fromARGB(
+                                        255,
+                                        255,
+                                        255,
+                                        255,
+                                      ),
+                                      constraints: BoxConstraints(
+                                        minWidth: 0.0,
+                                      ),
+                                      child: Icon(
+                                        Icons.remove_red_eye_outlined,
+                                        size: 18,
+                                      ),
+                                    ),
+                                  ),
+                                  SizedBox(width: 5),
+                                  Container(
+                                    width: 25,
+                                    height: 25,
+                                    alignment: Alignment.centerRight,
+                                    child: RawMaterialButton(
+                                      shape: CircleBorder(),
+                                      onPressed: () {
+                                        if (currentProjectCapture == null &&
+                                            selectedCaptures.isEmpty) {
+                                          return;
+                                        }
+                                        selectedCaptures.isEmpty
+                                            ? deleteCapture(
+                                                currentProjectCapture!.id,
+                                              )
+                                            : deleteCaptures();
+                                      },
+                                      padding: EdgeInsetsGeometry.all(2),
+                                      fillColor: const Color.fromARGB(
+                                        255,
+                                        255,
+                                        255,
+                                        255,
+                                      ),
+                                      constraints: BoxConstraints(
+                                        minWidth: 0.0,
+                                      ),
+                                      child: Icon(
+                                        Icons.delete_outlined,
+                                        size: 18,
+                                      ),
+                                    ),
+                                  ),
+                                  SizedBox(width: 8),
+                                ],
+                              ),
+                              Container(
+                                decoration: BoxDecoration(
+                                  border: Border.all(color: Colors.black),
+                                ),
+                                margin: EdgeInsets.all(7),
+                                height: 175,
+                                child: Scrollbar(
+                                  controller: _scrollController2,
+                                  thickness: 3,
+                                  radius: const Radius.circular(0),
+                                  thumbVisibility: true,
+                                  child: ScrollConfiguration(
+                                    behavior: const ScrollBehavior().copyWith(
+                                      scrollbars: false,
+                                    ),
+                                    child: ListView.builder(
+                                      itemCount: captures.length,
+                                      controller: _scrollController2,
+                                      itemBuilder: (BuildContext context, int index) {
+                                        return Container(
+                                          alignment: Alignment.centerLeft,
+                                          height: 23,
+                                          width: windowWidth - 30,
+
+                                          child: SizedBox(
+                                            width: double.infinity,
+                                            child: TapRegion(
+                                              onTapOutside: (event) {
+                                                if (currentCaptureIndex !=
+                                                    index) {
+                                                  return;
+                                                }
+
+                                                setState(() {
+                                                  editingCaptureName = false;
+                                                });
+                                              },
+                                              child: TextButton(
+                                                onLongPress: () async {
+                                                  currentCaptureIndex = index;
+                                                  currentProjectCapture =
+                                                      captures[index];
+
+                                                  _captureEditFocusNode
+                                                      .requestFocus();
+                                                  setState(() {
+                                                    _captureEditController
+                                                            .text =
+                                                        captures[index].name;
+                                                    editingCaptureName = true;
+                                                  });
+                                                  await service
+                                                      .setLastCaptureId(
+                                                        currentProjectCapture!
+                                                            .id,
+                                                      );
+                                                },
+                                                onPressed: () async {
+                                                  print(editingCaptureName);
+                                                  if (editingCaptureName)
+                                                    return;
+                                                  if (HardwareKeyboard
+                                                      .instance
+                                                      .isShiftPressed) {
+                                                    if (currentCaptureIndex !=
+                                                        -1) {
+                                                      selectedCaptures.add(
+                                                        currentCaptureIndex,
+                                                      );
+                                                      currentCaptureIndex = -1;
+                                                      currentProjectCapture =
+                                                          null;
+                                                      await service
+                                                          .setLastCaptureId(-1);
+                                                    }
+
+                                                    if (selectedCaptures
+                                                        .contains(index)) {
+                                                      selectedCaptures.remove(
+                                                        index,
+                                                      );
+                                                    } else {
+                                                      selectedCaptures.add(
+                                                        index,
+                                                      );
+                                                    }
+                                                  } else {
+                                                    selectedCaptures = [];
+                                                    currentCaptureIndex =
+                                                        currentCaptureIndex ==
+                                                            index
+                                                        ? -1
+                                                        : index;
+                                                    if (currentCaptureIndex ==
+                                                        index) {
+                                                      currentProjectCapture =
+                                                          captures[index];
+
+                                                      await service
+                                                          .setLastCaptureId(
+                                                            currentProjectCapture!
+                                                                .id,
+                                                          );
+                                                    } else {
+                                                      currentProjectCapture =
+                                                          null;
+                                                    }
+                                                  }
+                                                  setState(() {});
+                                                },
+                                                style: ButtonStyle(
+                                                  alignment:
+                                                      Alignment.centerLeft,
+                                                  backgroundColor:
+                                                      WidgetStateProperty.resolveWith<
+                                                        Color
+                                                      >((
+                                                        Set<WidgetState> states,
+                                                      ) {
+                                                        if (states.contains(
+                                                              WidgetState
+                                                                  .hovered,
+                                                            ) ||
+                                                            (currentCaptureIndex ==
+                                                                    index ||
+                                                                selectedCaptures
+                                                                    .contains(
+                                                                      index,
+                                                                    ))) {
+                                                          return const Color.fromARGB(
+                                                            255,
+                                                            255,
+                                                            239,
+                                                            232,
+                                                          );
+                                                        }
+                                                        return Colors
+                                                            .white; // null throus error in flutter 2.2+.
+                                                      }),
+                                                  textStyle:
+                                                      WidgetStatePropertyAll(
+                                                        TextStyle(
+                                                          color: Colors.black,
+                                                        ),
+                                                      ),
+                                                  shape: WidgetStatePropertyAll(
+                                                    ContinuousRectangleBorder(),
+                                                  ),
+                                                ),
+                                                child:
+                                                    editingCaptureName &&
+                                                        currentCaptureIndex ==
+                                                            index
+                                                    ? Container(
+                                                        child: TextField(
+                                                          onSubmitted:
+                                                              (value) async {
+                                                                editingCaptureName =
+                                                                    false;
+                                                                setState(() {});
+                                                                updateCapture(
+                                                                  value,
+                                                                );
+                                                              },
+                                                          textAlignVertical:
+                                                              TextAlignVertical
+                                                                  .center,
+                                                          focusNode:
+                                                              _captureEditFocusNode,
+                                                          cursorColor:
+                                                              Colors.black,
+                                                          style:
+                                                              GoogleFonts.montserrat(
+                                                                textStyle:
+                                                                    TextStyle(
+                                                                      fontSize:
+                                                                          10,
+                                                                    ),
+                                                              ),
+
+                                                          decoration: InputDecoration(
+                                                            enabledBorder: OutlineInputBorder(
+                                                              gapPadding: 0,
+                                                              borderRadius:
+                                                                  BorderRadius.circular(
+                                                                    3.0,
+                                                                  ),
+                                                              borderSide: BorderSide(
+                                                                color: Colors
+                                                                    .transparent,
+                                                                width: 0.0,
+                                                              ),
+                                                            ),
+                                                            focusedBorder: OutlineInputBorder(
+                                                              gapPadding: 0,
+                                                              borderRadius:
+                                                                  BorderRadius.circular(
+                                                                    5.0,
+                                                                  ),
+                                                              borderSide: BorderSide(
+                                                                color: Colors
+                                                                    .transparent,
+                                                                width: 0.0,
+                                                              ),
+                                                            ),
+                                                            border: OutlineInputBorder(
+                                                              gapPadding: 0,
+                                                              borderRadius:
+                                                                  BorderRadius.circular(
+                                                                    10.0,
+                                                                  ),
+                                                            ),
+                                                            contentPadding:
+                                                                EdgeInsets.zero,
+                                                            suffixIcon: InkWell(
+                                                              onTap: () async {
+                                                                editingCaptureName =
+                                                                    false;
+                                                                setState(() {});
+                                                                updateCapture(
+                                                                  _captureEditController
+                                                                      .text,
+                                                                );
+                                                              },
+                                                              child: Icon(
+                                                                Icons
+                                                                    .edit_outlined,
+                                                                color: Colors
+                                                                    .black,
+                                                                size: 10,
+                                                              ),
+                                                            ),
+                                                          ),
+                                                          controller:
+                                                              _captureEditController,
+                                                        ),
+                                                      )
+                                                    : Text(
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                        captures[index].name,
+                                                        style:
+                                                            GoogleFonts.montserrat(
+                                                              textStyle:
+                                                                  TextStyle(
+                                                                    color: Colors
+                                                                        .black,
+                                                                    fontSize:
+                                                                        10,
+                                                                  ),
+                                                            ),
+                                                      ),
+                                              ),
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              Container(
+                                padding: EdgeInsets.only(
+                                  left: 7,
+                                  right: 7,
+                                  top: 5,
+                                ),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Container(
+                                        height: 40,
+                                        child: TextField(
+                                          onSubmitted: (String value) async {
+                                            await createNewCapture(value);
+                                          },
+                                          controller: _createCaptureController,
+                                          cursorColor: Colors.black,
+                                          style: GoogleFonts.montserrat(
+                                            textStyle: TextStyle(fontSize: 10),
+                                          ),
+                                          decoration: InputDecoration(
+                                            suffixIcon: InkWell(
+                                              onTap: () async {
+                                                await createNewCapture(
+                                                  _createCaptureController.text,
+                                                );
+                                              },
+                                              child: Icon(
+                                                Icons.add,
+                                                color: Colors.black,
+                                                size: 10,
+                                              ),
+                                            ),
+                                            hintText: "New capture",
+                                            contentPadding: EdgeInsets.all(5),
+                                            enabledBorder: OutlineInputBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(3.0),
+                                              borderSide: BorderSide(
+                                                color: Colors.grey,
+                                                width: 0.0,
+                                              ),
+                                            ),
+                                            focusedBorder: OutlineInputBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(5.0),
+                                              borderSide: BorderSide(
+                                                color: Colors.grey,
+                                                width: 0.0,
+                                              ),
+                                            ),
+                                            border: OutlineInputBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(10.0),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      : SizedBox(),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );

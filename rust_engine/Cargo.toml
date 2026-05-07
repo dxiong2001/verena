@@ -19,3 +19,4 @@ blake3 = "1.5"
 dart-sys = "4.0.2"
 allo-isolate = "0.1"
 dxgi-capture-rs = "1.2.2"
+bytemuck = { version = "1.14", features = ["derive"] }
